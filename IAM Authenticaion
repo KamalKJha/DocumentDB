@@ -1,0 +1,164 @@
+Step-by-Step Document to Configure IAM Authentication for Amazon DocumentDB
+This guide explains how to set up IAM authentication for Amazon DocumentDB, including creating an IAM policy, role, and database user, and connecting from both an EC2 instance and a client machine outside AWS.
+
+Part 1: Setting Up IAM Policy and Role
+Step 1: Create IAM Policy
+The IAM policy grants the necessary permissions for rds-db:connect to your DocumentDB cluster.
+
+AWS CLI Command:
+bash
+Copy code
+aws iam create-policy \
+    --policy-name DocumentDBConnectPolicy \
+    --policy-document '{
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "rds-db:connect"
+                ],
+                "Resource": "arn:aws:rds-db:<region>:<account-id>:dbuser:<cluster-id>/<db-username>"
+            }
+        ]
+    }'
+Replace:
+
+<region>: AWS region (e.g., us-east-1).
+<account-id>: AWS account ID.
+<cluster-id>: DocumentDB cluster ID.
+<db-username>: The database user (e.g., dbUser).
+Step 2: Create IAM Role
+The IAM role will be used by your EC2 instance or AWS service to assume the necessary permissions.
+
+AWS CLI Command:
+bash
+Copy code
+aws iam create-role \
+    --role-name DocumentDBIAMRole \
+    --assume-role-policy-document '{
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Principal": {
+                    "Service": "ec2.amazonaws.com"
+                },
+                "Action": "sts:AssumeRole"
+            }
+        ]
+    }'
+Step 3: Attach the Policy to the Role
+Attach the DocumentDBConnectPolicy created in Step 1 to the role created in Step 2.
+
+AWS CLI Command:
+bash
+Copy code
+aws iam attach-role-policy \
+    --role-name DocumentDBIAMRole \
+    --policy-arn arn:aws:iam::<account-id>:policy/DocumentDBConnectPolicy
+Step 4: Attach the Role to an EC2 Instance
+Open the EC2 Console.
+Select the EC2 instance you want to use for the connection.
+Click Actions → Security → Modify IAM Role.
+Select the DocumentDBIAMRole and save the changes.
+Part 2: Enable IAM Authentication on DocumentDB
+Step 1: Modify DocumentDB Cluster
+Enable IAM authentication for your cluster.
+
+AWS CLI Command:
+bash
+Copy code
+aws docdb modify-db-cluster \
+    --db-cluster-identifier <your-cluster-id> \
+    --enable-iam-database-authentication \
+    --apply-immediately
+Step 2: Update Security Group
+Allow connections to the DocumentDB cluster from:
+
+EC2 Instance Security Group: Add its security group ID to the DocumentDB inbound rules.
+Client Machine Public IP: Add your machine’s public IP (e.g., 203.0.113.0/32) to the inbound rules.
+Inbound Rule Example:
+Protocol: TCP
+Port Range: 27017
+Source: Security group ID or public IP.
+Part 3: Create a Database User and Role
+Step 1: Connect to DocumentDB as Admin
+Connect using the admin credentials and the MongoDB client.
+
+Connection Command:
+bash
+Copy code
+mongo "mongodb://<admin-username>:<admin-password>@<cluster-endpoint>:27017/admin?tls=true&tlsCAFile=<path-to-CA-certificate>"
+Step 2: Create a Database User
+Run the following command to create a database user associated with IAM authentication:
+
+javascript
+Copy code
+db.runCommand({
+  createUser: "dbUser",
+  roles: [
+    { role: "readWrite", db: "myDatabase" }
+  ]
+})
+Part 4: Connect to DocumentDB
+Option 1: From an EC2 Instance
+Use the MONGODB-AWS authentication mechanism.
+
+Install the required libraries:
+
+bash
+Copy code
+sudo apt-get update
+sudo apt-get install -y python3-pip
+pip3 install pymongo boto3
+Use this Python script to connect:
+
+python
+Copy code
+from pymongo import MongoClient
+
+# DocumentDB connection settings
+cluster_endpoint = "your-cluster-endpoint:27017"
+db_username = "dbUser"
+
+# Connect to DocumentDB using MONGODB-AWS authentication
+client = MongoClient(
+    cluster_endpoint,
+    username=db_username,
+    authSource='$external',
+    authMechanism='MONGODB-AWS'
+)
+
+# Test the connection
+db = client['myDatabase']
+print(db.list_collection_names())
+Option 2: From a Client Machine Outside AWS
+If connecting from outside AWS:
+
+Generate IAM Authentication Token:
+
+bash
+Copy code
+aws rds generate-db-auth-token \
+    --hostname <cluster-endpoint> \
+    --port 27017 \
+    --username dbUser \
+    --region <region>
+Use the Token in Connection String:
+
+bash
+Copy code
+mongo "mongodb://dbUser@<cluster-endpoint>:27017/admin?authSource=\$external&authMechanism=MONGODB-AWS"
+Part 5: Testing and Troubleshooting
+Test IAM Authentication
+Verify connection from the EC2 instance using the Python script.
+Verify connection from the client machine using the token-based method.
+Common Issues
+"Authentication Failed" Error:
+
+Ensure the IAM role or token has the necessary rds-db:connect permissions.
+Verify that IAM authentication is enabled for the cluster.
+Connection Timeout:
+
+Ensure the security group allows inbound traffic from your source.
